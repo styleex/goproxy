@@ -110,13 +110,22 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 		} else {
 			go func() {
 				var wg sync.WaitGroup
-				wg.Add(2)
-				go copyOrWarn(ctx, targetSiteCon, proxyClient, &wg)
-				go copyOrWarn(ctx, proxyClient, targetSiteCon, &wg)
-				wg.Wait()
-				proxyClient.Close()
-				targetSiteCon.Close()
+				wg.Add(1)
+				// К старому коду:
+				// Эти две горутины связаны. Если вторая завершилась с ошибкой - первую тоже
+				// нужно закрывать.
+				// Кейс: сервер закрыл соединение (EOF), но мы бесконечно ждём, пока клиент не отправит
+				// что нибудь ещё, но он не отправит.
 
+				// К новому коду: если сервер закрыл соединение, закрываем также и клиентское соединение
+				go copyOrWarn(ctx, targetSiteCon, proxyClient, &wg)
+				_, err := io.Copy(proxyClient, targetSiteCon)
+				if err != nil {
+					ctx.Warnf("%s", err)
+				}
+				proxyClient.Close()
+				wg.Wait()
+				targetSiteCon.Close()
 			}()
 		}
 
